@@ -38,7 +38,7 @@ jobs:
           sort -r -k1,1 -k2,2 assets.tsv > sorted.tsv
           budget=$(( BUDGET_MB * 1000000 )); used=0; n=0
           while IFS=$'\t' read -r tag name size url; do
-            [[ "$name" =~ ^[a-z0-9-]+\.(mp3|mp4|jpg)$ ]] || continue
+            [[ "$name" =~ ^[a-z0-9-]+\.(mp3|mp4|jpg|json)$ ]] || continue   # json = Listen read-along timing sidecars
             if (( used + size > budget )); then continue; fi
             d="_site/${tag#media-}"; mkdir -p "$d"
             curl -sSfL --retry 3 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" -o "$d/$name" "$url"
