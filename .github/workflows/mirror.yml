@@ -1,0 +1,63 @@
+# Streaming mirror for The Daily Brief media.
+# GitHub Release assets (the canonical store, in carl-m-healy/daily-brief, tags media-YYYY-MM-DD) are served as
+# application/octet-stream + Content-Disposition: attachment, which iOS Safari will not play inline.
+# This workflow copies the newest release assets (within a size budget) into this repo's GitHub Pages site,
+# deployed from an artifact (nothing is committed to git, so the repo never grows), where they are served
+# with the right Content-Type (audio/mpeg, video/mp4) and HTTP Range support.
+name: mirror
+on:
+  workflow_dispatch:
+    inputs:
+      budget_mb:
+        description: Max total size of the mirrored files (Pages sites are limited to 1 GB)
+        required: false
+        default: "900"
+  schedule:
+    - cron: "41 11 * * *"   # daily safety net (04:41 Phoenix)
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Collect release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUDGET_MB: ${{ inputs.budget_mb || '900' }}
+          SRC_REPO: carl-m-healy/daily-brief
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          gh api --paginate "repos/$SRC_REPO/releases?per_page=100" --jq '.[] | select(.tag_name | test("^media-[0-9]{4}-[0-9]{2}-[0-9]{2}$")) | .tag_name as $t | .assets[] | [$t, .name, (.size|tostring), .url] | @tsv' > assets.tsv
+          sort -r -k1,1 -k2,2 assets.tsv > sorted.tsv
+          budget=$(( BUDGET_MB * 1000000 )); used=0; n=0
+          while IFS=$'\t' read -r tag name size url; do
+            [[ "$name" =~ ^[a-z0-9-]+\.(mp3|mp4|jpg)$ ]] || continue
+            if (( used + size > budget )); then continue; fi
+            d="_site/${tag#media-}"; mkdir -p "$d"
+            curl -sSfL --retry 3 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" -o "$d/$name" "$url"
+            used=$(( used + size )); n=$(( n + 1 ))
+          done < sorted.tsv
+          printf 'User-agent: *\nDisallow: /\n' > _site/robots.txt
+          printf '<!doctype html><meta name="robots" content="noindex"><title>Not found</title>' > _site/index.html
+          touch _site/.nojekyll
+          echo "mirrored $n files, $(( used / 1000000 )) MB"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
